@@ -8,6 +8,7 @@
 typedef struct {
   char *pid;
   char *cmdline;
+  char *name;
 } Proc;
 
 typedef struct {
@@ -16,7 +17,7 @@ typedef struct {
   size_t length;
 } ProcArray;
 
-void insert_process(char *pid, char *cmdline, ProcArray *a) {
+void insert_process(char *name, char *pid, char *cmdline, ProcArray *a) {
   if (a->length == a->size) {
     a->size *= 2;
     Proc *new_processes = realloc(a->processes, a->size * sizeof(Proc));
@@ -27,11 +28,8 @@ void insert_process(char *pid, char *cmdline, ProcArray *a) {
     a->processes = new_processes;
   }
   a->processes[a->length].pid = strdup(pid);
-  if (cmdline != NULL) {
-    a->processes[a->length].cmdline = strdup(cmdline);
-  } else {
-    a->processes[a->length].cmdline = NULL;
-  }
+  a->processes[a->length].name = name ? strdup(name) : strdup("NULL");
+  a->processes[a->length].cmdline = cmdline ? strdup(cmdline) : strdup("NULL");
   a->length++;
 }
 
@@ -45,6 +43,7 @@ void free_process_array(ProcArray *a) {
   for (size_t i = 0; i < a->length; i++) {
     free(a->processes[i].pid);
     free(a->processes[i].cmdline);
+    free(a->processes[i].name);
   }
   free(a->processes);
   a->processes = NULL;
@@ -57,7 +56,7 @@ char *get_cmdline(char *pid, char *f_name) {
   FILE *file = fopen(file_path, "r");
   if (file == NULL) {
     printf("Unable to open file %s: %s\n", file_path, strerror(errno));
-    return "Can retrieve cmdline";
+    return NULL;
   }
   char *cmdline = malloc(4096);
   if (cmdline == NULL) {
@@ -79,51 +78,41 @@ char *get_cmdline(char *pid, char *f_name) {
   return cmdline;
 }
 
-// int check_if_descendant(char *pid, char *f_name) {
-//   char *file_path = malloc(256);
-//   if (file_path == NULL) {
-//     printf("Memory allocation failed\n");
-//     exit(EXIT_FAILURE);
-//   }
-//
-//   sprintf(file_path, "/proc/%s/%s", pid, f_name);
-//   FILE *file = fopen(file_path, "r");
-//   if (file == NULL) {
-//     printf("Unable to open file %s: %s\n", file_path, strerror(errno));
-//     return 0;
-//   }
-//   char *gid = malloc(256);
-//   if (gid == NULL) {
-//     printf("Memory allocation failed\n");
-//     exit(EXIT_FAILURE);
-//   }
-//
-//   char *line = malloc(256);
-//   if (line == NULL) {
-//     printf("Memory allocation failed\n");
-//     exit(EXIT_FAILURE);
-//   }
-//
-//   char *gid_key = "NStgid";
-//
-//   while (fgets(line, 256, file)) {
-//     char key[100];
-//     sscanf(line, "%[^:]: %10s", key, gid);
-//     if (strcmp(key, gid_key) == 0) {
-//       break;
-//     }
-//   }
-//   int is_not_descendant = strcmp(gid, pid) == 0;
-//   fclose(file);
-//   free(file_path);
-//   free(gid);
-//   free(line);
-//   if (is_not_descendant) {
-//     return 1;
-//   }
-//
-//   return 0;
-// }
+char *get_name(FILE *file) {
+  fseek(file, 0, SEEK_SET);
+  char line[256];
+  while (fgets(line, 256, file)) {
+    char key[100];
+    char value[100];
+    if (sscanf(line, "%[^:]: %99s", key, value) >= 1) {
+      if (strcmp(key, "Name") == 0) {
+        return strdup(value);
+      };
+    }
+  }
+  return NULL;
+}
+
+int get_is_children_process(FILE *file) {
+  fseek(file, 0, SEEK_SET);
+  char line[256];
+  int is_children;
+  while (fgets(line, 256, file)) {
+    char key[100];
+    char value[100];
+    if (sscanf(line, "%[^:]: %99s", key, value) >= 1) {
+      if (strcmp(key, "PPid") == 0) {
+        if (strcmp(value, "1") == 0) {
+          is_children = 0;
+        } else {
+          is_children = 1;
+        }
+        break;
+      }
+    }
+  }
+  return is_children;
+}
 
 int main(int argc, char *argv[]) {
   DIR *dir;
@@ -139,7 +128,7 @@ int main(int argc, char *argv[]) {
 
   init_process_array(&processes, 10);
 
-  printf("Content of directory: \n");
+  printf("Processes: \n");
 
   while ((entry = readdir(dir))) {
     char *pid = strdup(entry->d_name);
@@ -162,6 +151,7 @@ int main(int argc, char *argv[]) {
       }
     }
     if (!is_numeric) {
+      free(pid);
       continue;
     }
 
@@ -170,6 +160,7 @@ int main(int argc, char *argv[]) {
     DIR *proc = opendir(proc_path);
     if (proc == NULL) {
       if (errno == ENOTDIR) {
+        free(pid);
         continue; // Skip non-directories
       }
       printf("Failed to open %s: %s\n", proc_path, strerror(errno));
@@ -180,13 +171,45 @@ int main(int argc, char *argv[]) {
       char *f_name = strdup(sub_entry->d_name);
       if (f_name == NULL) {
         printf("Memory allocation failed");
+        free(pid);
+        closedir(dir);
+        closedir(proc);
         return EXIT_FAILURE;
       }
 
       if (strcmp(f_name, "status") == 0) {
-        char *cmdline = get_cmdline(pid, "cmdline");
+        char *file_path = malloc(256);
+        if (file_path == NULL) {
+          printf("Memory allocation failed\n");
+          free(pid);
+          closedir(dir);
+          closedir(proc);
 
-        insert_process(pid, cmdline, &processes);
+          exit(EXIT_FAILURE);
+        }
+
+        sprintf(file_path, "/proc/%s/%s", pid, f_name);
+        FILE *file = fopen(file_path, "r");
+        if (file == NULL) {
+          printf("Unable to open file %s: %s\n", file_path, strerror(errno));
+          free(file_path);
+          free(pid);
+          closedir(dir);
+          closedir(proc);
+          return 0;
+        }
+        int is_children_process = get_is_children_process(file);
+        if (is_children_process == 0) {
+          char *name = get_name(file);
+          char *cmdline = get_cmdline(pid, "cmdline");
+
+          insert_process(name, pid, cmdline, &processes);
+          free(name);
+          free(cmdline);
+        }
+        free(f_name);
+        free(file_path);
+        fclose(file);
         continue;
       }
       free(f_name);
@@ -198,8 +221,12 @@ int main(int argc, char *argv[]) {
   closedir(dir);
   for (int i = 0; i < processes.length; i++) {
     char *pid = processes.processes[i].pid;
+    char *name = processes.processes[i].name;
     char *cmdline = processes.processes[i].cmdline;
-    printf("%s -> %s\n", pid, cmdline);
+    printf("----\n");
+    printf("%s -> %s\n", pid, name);
+    printf("%s\n", cmdline);
+    printf("----\n");
   }
   free_process_array(&processes);
   return EXIT_SUCCESS;
