@@ -22,7 +22,7 @@ void insert_process(char *name, char *pid, char *cmdline, ProcArray *a) {
     a->size *= 2;
     Proc *new_processes = realloc(a->processes, a->size * sizeof(Proc));
     if (new_processes == NULL) {
-      printf("Memory reallocation failed\n");
+      fprintf(stderr, "Memory reallocation failed\n");
       exit(EXIT_FAILURE);
     }
     a->processes = new_processes;
@@ -52,13 +52,13 @@ void free_process_array(ProcArray *a) {
 
 char *get_cmdline(char *pid, char *f_name) {
   char file_path[256];
-  sprintf(file_path, "/proc/%s/%s", pid, f_name);
+  snprintf(file_path, sizeof(file_path), "/proc/%s/%s", pid, f_name);
   FILE *file = fopen(file_path, "r");
   if (file == NULL) {
-    printf("Unable to open file %s: %s\n", file_path, strerror(errno));
+    fprintf(stderr, "Unable to open file %s: %s\n", file_path, strerror(errno));
     return NULL;
   }
-  char *cmdline = malloc(4096);
+  char *cmdline = malloc(4097);
   if (cmdline == NULL) {
     fclose(file);
     return NULL;
@@ -66,6 +66,7 @@ char *get_cmdline(char *pid, char *f_name) {
   size_t bytes_read = fread(cmdline, sizeof(char), 4096, file);
   if (bytes_read == 0) {
     free(cmdline);
+    fclose(file);
     return NULL;
   }
   fclose(file);
@@ -82,9 +83,9 @@ char *get_name(FILE *file) {
   fseek(file, 0, SEEK_SET);
   char line[256];
   while (fgets(line, 256, file)) {
-    char key[100];
-    char value[100];
-    if (sscanf(line, "%[^:]: %99s", key, value) >= 1) {
+    char key[20];
+    char value[20];
+    if (sscanf(line, "%19[^:]: %19s", key, value) >= 1) {
       if (strcmp(key, "Name") == 0) {
         return strdup(value);
       };
@@ -96,22 +97,22 @@ char *get_name(FILE *file) {
 int get_is_children_process(FILE *file) {
   fseek(file, 0, SEEK_SET);
   char line[256];
-  int is_children;
+  int is_child = 0;
   while (fgets(line, 256, file)) {
-    char key[100];
-    char value[100];
-    if (sscanf(line, "%[^:]: %99s", key, value) >= 1) {
+    char key[20];
+    char value[20];
+    if (sscanf(line, "%19[^:]: %19s", key, value) >= 1) {
       if (strcmp(key, "PPid") == 0) {
         if (strcmp(value, "1") == 0) {
-          is_children = 0;
+          is_child = 0;
         } else {
-          is_children = 1;
+          is_child = 1;
         }
         break;
       }
     }
   }
-  return is_children;
+  return is_child;
 }
 
 int main(int argc, char *argv[]) {
@@ -120,7 +121,7 @@ int main(int argc, char *argv[]) {
 
   dir = opendir("/proc");
   if (dir == NULL) {
-    printf("Fail to opendir %s\n", strerror(errno));
+    fprintf(stderr, "Fail to opendir %s\n", strerror(errno));
     return EXIT_FAILURE;
   }
 
@@ -131,16 +132,11 @@ int main(int argc, char *argv[]) {
   printf("Processes: \n");
 
   while ((entry = readdir(dir))) {
-    char *pid = strdup(entry->d_name);
-    if (pid == NULL) {
-      printf("Memory allocation failed\n");
-      return EXIT_FAILURE;
-    }
+    char *pid = entry->d_name;
 
-    if (strcmp(pid, ".") == 0 || strcmp(pid, "..") == 0) {
-      free(pid);
-      continue;
-    }
+    // if (strcmp(pid, ".") == 0 || strcmp(pid, "..") == 0) {
+    //   continue;
+    // }
 
     // Skip non-numeric entries (only process PIDs)
     int is_numeric = 1;
@@ -151,52 +147,40 @@ int main(int argc, char *argv[]) {
       }
     }
     if (!is_numeric) {
-      free(pid);
       continue;
     }
 
     char proc_path[256];
-    sprintf(proc_path, "/proc/%s", pid);
+    snprintf(proc_path, sizeof(proc_path), "/proc/%s", pid);
     DIR *proc = opendir(proc_path);
     if (proc == NULL) {
       if (errno == ENOTDIR) {
-        free(pid);
         continue; // Skip non-directories
       }
-      printf("Failed to open %s: %s\n", proc_path, strerror(errno));
+      fprintf(stderr, "Failed to open %s: %s\n", proc_path, strerror(errno));
       return EXIT_FAILURE;
     }
     struct dirent *sub_entry;
     while ((sub_entry = readdir(proc))) {
-      char *f_name = strdup(sub_entry->d_name);
+      char *f_name = sub_entry->d_name;
       if (f_name == NULL) {
-        printf("Memory allocation failed");
-        free(pid);
+        fprintf(stderr, "Memory allocation failed\n");
         closedir(dir);
         closedir(proc);
         return EXIT_FAILURE;
       }
 
       if (strcmp(f_name, "status") == 0) {
-        char *file_path = malloc(256);
-        if (file_path == NULL) {
-          printf("Memory allocation failed\n");
-          free(pid);
-          closedir(dir);
-          closedir(proc);
+        char file_path[256];
+        snprintf(file_path, sizeof(file_path), "/proc/%s/%s", pid, f_name);
 
-          exit(EXIT_FAILURE);
-        }
-
-        sprintf(file_path, "/proc/%s/%s", pid, f_name);
         FILE *file = fopen(file_path, "r");
         if (file == NULL) {
-          printf("Unable to open file %s: %s\n", file_path, strerror(errno));
-          free(file_path);
-          free(pid);
+          fprintf(stderr, "Unable to open file %s: %s\n", file_path,
+                  strerror(errno));
           closedir(dir);
           closedir(proc);
-          return 0;
+          return EXIT_FAILURE;
         }
         int is_children_process = get_is_children_process(file);
         if (is_children_process == 0) {
@@ -207,19 +191,15 @@ int main(int argc, char *argv[]) {
           free(name);
           free(cmdline);
         }
-        free(f_name);
-        free(file_path);
         fclose(file);
         continue;
       }
-      free(f_name);
     }
     closedir(proc);
-    free(pid);
   }
 
   closedir(dir);
-  for (int i = 0; i < processes.length; i++) {
+  for (size_t i = 0; i < processes.length; i++) {
     char *pid = processes.processes[i].pid;
     char *name = processes.processes[i].name;
     char *cmdline = processes.processes[i].cmdline;
