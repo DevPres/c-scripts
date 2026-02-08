@@ -49,6 +49,10 @@ void print_usage(void) {
 }
 
 bool create_path_recursive(const char *path) {
+  if (path == NULL || path[0] == '\0') {
+    return false;
+  }
+
   char tmp[PATH_MAX];
   char *p = NULL;
   size_t len;
@@ -84,6 +88,10 @@ bool validate_and_create_path(const char *path, const char *path_type) {
     error_exit("Failed to read user input");
   }
 
+  int c;
+  while ((c = getchar()) != '\n' && c != EOF)
+    ;
+
   if (response == 'y' || response == 'Y') {
     if (!create_path_recursive(path)) {
       error_exit("Failed to create path");
@@ -106,13 +114,13 @@ void parse_arguments(int argc, char *argv[], Config *config) {
     error_exit("Memory allocation failed");
   }
 
-  int conf_path_len = strlen(ROOT) + 1 + strlen(DEFAULT_CONFIG) + 1;
+  size_t conf_path_len = strlen(ROOT) + 1 + strlen(DEFAULT_CONFIG) + 1;
   config->conf_path = malloc(conf_path_len);
   if (config->conf_path == NULL) {
     error_exit("Memory allocation failed");
   }
   snprintf(config->conf_path, conf_path_len, "%s/%s", ROOT, DEFAULT_CONFIG);
-  int local_path_len = strlen(ROOT) + 1 + strlen(DEFAULT_LOCAL_PATH) + 1;
+  size_t local_path_len = strlen(ROOT) + 1 + strlen(DEFAULT_LOCAL_PATH) + 1;
   config->local_path = malloc(local_path_len);
   if (config->local_path == NULL) {
     error_exit("Memory allocation failed");
@@ -179,51 +187,46 @@ void parse_arguments(int argc, char *argv[], Config *config) {
   // Set working directory default if not specified
   if (config->work_path == NULL) {
     config->work_path = strdup(config->dest_path);
+    if (config->work_path == NULL) {
+      error_exit("Memory allocation failed");
+    }
   }
 }
 char *build_docker_command(const Config *config) {
-  // Calculate required buffer size
-  size_t size = strlen("docker --rm run -it -v \"") +
-                strlen(config->mount_path) + 1 + // ":"
-                strlen(config->dest_path) + 1 +  // "\""
-                strlen(" -v \"") + strlen(config->local_path) + 1 +
-                strlen(config->local_dest_path) + 1 + strlen(" -v \"") +
-                strlen(config->conf_path) + 1 + strlen(config->conf_dest_path) +
-                1 + strlen(" -w \"") + strlen(config->work_path) + 1 + // "\" "
-                strlen(" --name opencode ") +
-                strlen(" --add-host=host.docker.internal:host-gateway ") +
-                strlen(DOCKER_IMAGE) + 1; // "\0"
-  size_t envsize = 0;
+  const char *fmt =
+      "docker run --rm -it -v \"%s:%s\" -v \"%s:%s\" -v \"%s:%s\" -w \"%s\" "
+      "--add-host=host.docker.internal:host-gateway --name opencode %s%s%s%s";
+
+  // Build env-file fragment if provided
+  const char *env_prefix = "";
+  const char *env_file = "";
+  const char *env_suffix = "";
   if (config->env_file != NULL) {
-    envsize = strlen(" --env-file \" ") + strlen(config->env_file) + 1;
-    size += envsize;
+    env_prefix = "--env-file \"";
+    env_file = config->env_file;
+    env_suffix = "\" ";
   }
 
-  char *command = malloc(size);
+  // Compute exact size needed
+  int len = snprintf(NULL, 0, fmt, config->mount_path, config->dest_path,
+                     config->local_path, config->local_dest_path,
+                     config->conf_path, config->conf_dest_path,
+                     config->work_path, env_prefix, env_file, env_suffix,
+                     DOCKER_IMAGE);
+  if (len < 0) {
+    error_exit("Failed to compute command length");
+  }
+
+  char *command = malloc((size_t)len + 1);
   if (command == NULL) {
     error_exit("Memory allocation failed");
   }
 
-  // Build command string
-  sprintf(
-      command,
-      "docker run --rm -it -v \"%s:%s\" -v \"%s:%s\" -v \"%s:%s\"  -w \"%s\" "
-      "--add-host=host.docker.internal:host-gateway --name opencode ",
-      config->mount_path, config->dest_path, config->local_path,
-      config->local_dest_path, config->conf_path, config->conf_dest_path,
-      config->work_path);
+  snprintf(command, (size_t)len + 1, fmt, config->mount_path,
+           config->dest_path, config->local_path, config->local_dest_path,
+           config->conf_path, config->conf_dest_path, config->work_path,
+           env_prefix, env_file, env_suffix, DOCKER_IMAGE);
 
-  if (config->env_file != NULL && envsize > 0) {
-    char *tmp = malloc(envsize);
-    if (tmp == NULL) {
-      error_exit("Memory allocation failed");
-    }
-    sprintf(tmp, "--env-file \"%s\" ", config->env_file);
-    strcat(command, tmp);
-    free(tmp);
-  }
-
-  strcat(command, DOCKER_IMAGE);
   return command;
 }
 
@@ -267,7 +270,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (!validate_and_create_path(config.local_path, "Local")) {
-    error_exit("Configuration path validation failed");
+    error_exit("Local path validation failed");
   }
 
   // Validate env file if provided
