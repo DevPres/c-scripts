@@ -15,6 +15,7 @@ It lets you choose a process and, after confirmation, sends a `SIGTERM` signal t
 
 ```sh
 gcc -O3 pkiller.c -o ~/.config/rofi/pkiller
+chmod +x ~/.config/rofi/pkiller
 ```
 
 ### Usage
