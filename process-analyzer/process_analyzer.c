@@ -119,6 +119,22 @@ int main(int argc, char *argv[]) {
   DIR *dir;
   ProcArray processes;
 
+  char *pid_info = getenv("ROFI_INFO");
+  if (pid_info != NULL && argc > 1 && strcmp(argv[1], "YES") == 0) {
+    printf("killed: %s\n", pid_info);
+    return 0;
+  }
+  if (pid_info != NULL) {
+    printf("YES");
+    putchar('\0');
+    printf("info\x1f%s\x1f\n", pid_info);
+
+    printf("NO\n");
+    return 0;
+  }
+  // If they clicked a PID for the first time, show confirmation menu
+  // We pass the PID forward again using 'info' so we don't lose it
+
   dir = opendir("/proc");
   if (dir == NULL) {
     fprintf(stderr, "Fail to opendir %s\n", strerror(errno));
@@ -203,10 +219,12 @@ int main(int argc, char *argv[]) {
     char *pid = processes.processes[i].pid;
     char *name = processes.processes[i].name;
     char *cmdline = processes.processes[i].cmdline;
-    printf("----\n");
-    printf("%s -> %s\n", pid, name);
-    printf("%s\n", cmdline);
-    printf("----\n");
+    // printf("----\n");
+    printf("%s -> %s", pid, name);
+    // printf("%s\n", cmdline);
+    // printf("----\n");
+    putchar('\0');
+    printf("info\x1f%s\x1f\n", pid);
   }
   free_process_array(&processes);
   return EXIT_SUCCESS;
