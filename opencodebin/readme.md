@@ -2,6 +2,9 @@
 # Opencodebin
 Simple script to compose a Docker command to open "opencode" in Docker.
 
+If not present create a folder `$HOME/.local/share/opencode`, where opencode save session and auth stuff.
+If you pass a configuration path , if the folder is not present it will create it.
+
 Yes it could be a simple bash file. But i want power, so i'm learning C. 
 
 ## Options:
@@ -11,8 +14,8 @@ Yes it could be a simple bash file. But i want power, so i'm learning C.
   -c PATH    Configuration path (default /$HOME/.config/opencode/)
   -w PATH    Working directory (default: same as -d)
   -e PATH    Environment file path
-  -h         Show this help message
 ```
+
 ## Build
 
 ```sh
