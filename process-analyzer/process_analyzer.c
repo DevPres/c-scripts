@@ -1,5 +1,7 @@
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,9 +52,9 @@ void free_process_array(ProcArray *a) {
   a->size = a->length = 0;
 }
 
-char *get_cmdline(char *pid, char *f_name) {
+char *get_cmdline(char *pid) {
   char file_path[256];
-  snprintf(file_path, sizeof(file_path), "/proc/%s/%s", pid, f_name);
+  snprintf(file_path, sizeof(file_path), "/proc/%s/cmdline", pid);
   FILE *file = fopen(file_path, "r");
   if (file == NULL) {
     fprintf(stderr, "Unable to open file %s: %s\n", file_path, strerror(errno));
@@ -119,12 +121,47 @@ int main(int argc, char *argv[]) {
   DIR *dir;
   ProcArray processes;
 
+  putchar('\0');
+  // Change the prompt and header message
+  printf("prompt\x1f Search\n");
+
   char *pid_info = getenv("ROFI_INFO");
   if (pid_info != NULL && argc > 1 && strcmp(argv[1], "YES") == 0) {
-    printf("killed: %s\n", pid_info);
-    return 0;
+    char *endptr;
+    errno = 0;
+    long val = strtol(pid_info, &endptr, 10);
+    if (endptr == pid_info || *endptr != '\0' || errno == ERANGE || val <= 0 ||
+        val > (long)INT_MAX) {
+      putchar('\0');
+      printf(
+          "message\x1f <b><span foreground='red'>Invalid PID %s</span></b> \n",
+          pid_info);
+      return 0;
+
+    } else {
+      pid_t pidt = (pid_t)val;
+      // Use pid safely here
+      if (kill(pidt, SIGTERM) == -1) {
+        putchar('\0');
+        printf(
+            "message\x1f <b><span foreground='red'>Can't kill %i</span></b> \n",
+            pidt);
+        return 0;
+      }
+      putchar('\0');
+      printf(
+          "message\x1f <b><span foreground='red'>killed PID %s</span></b> \n",
+          pid_info);
+      printf("Back");
+      return 0;
+    }
   }
   if (pid_info != NULL) {
+    putchar('\0');
+    printf("message\x1f  <b><span foreground='red'>Are you sure you want to "
+           "kill "
+           "PID %s?</span></b>\n",
+           pid_info);
     printf("YES");
     putchar('\0');
     printf("info\x1f%s\x1f\n", pid_info);
@@ -132,6 +169,7 @@ int main(int argc, char *argv[]) {
     printf("NO\n");
     return 0;
   }
+
   // If they clicked a PID for the first time, show confirmation menu
   // We pass the PID forward again using 'info' so we don't lose it
 
@@ -144,8 +182,8 @@ int main(int argc, char *argv[]) {
   struct dirent *entry;
 
   init_process_array(&processes, 10);
-
-  printf("Processes: \n");
+  putchar('\0');
+  printf("message\x1f <b>Processes:</b> \n");
 
   while ((entry = readdir(dir))) {
     char *pid = entry->d_name;
@@ -176,41 +214,29 @@ int main(int argc, char *argv[]) {
       fprintf(stderr, "Failed to open %s: %s\n", proc_path, strerror(errno));
       return EXIT_FAILURE;
     }
-    struct dirent *sub_entry;
-    while ((sub_entry = readdir(proc))) {
-      char *f_name = sub_entry->d_name;
-      if (f_name == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        closedir(dir);
-        closedir(proc);
-        return EXIT_FAILURE;
-      }
+    char file_path[256];
+    snprintf(file_path, sizeof(file_path), "/proc/%s/status", pid);
 
-      if (strcmp(f_name, "status") == 0) {
-        char file_path[256];
-        snprintf(file_path, sizeof(file_path), "/proc/%s/%s", pid, f_name);
-
-        FILE *file = fopen(file_path, "r");
-        if (file == NULL) {
-          fprintf(stderr, "Unable to open file %s: %s\n", file_path,
-                  strerror(errno));
-          closedir(dir);
-          closedir(proc);
-          return EXIT_FAILURE;
-        }
-        int is_children_process = get_is_children_process(file);
-        if (is_children_process == 0) {
-          char *name = get_name(file);
-          char *cmdline = get_cmdline(pid, "cmdline");
-
-          insert_process(name, pid, cmdline, &processes);
-          free(name);
-          free(cmdline);
-        }
-        fclose(file);
-        continue;
-      }
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+      fprintf(stderr, "Unable to open file %s: %s\n", file_path,
+              strerror(errno));
+      closedir(dir);
+      closedir(proc);
+      return EXIT_FAILURE;
     }
+    int is_children_process = get_is_children_process(file);
+    if (is_children_process == 0) {
+      char *name = get_name(file);
+      char *cmdline = get_cmdline(pid);
+
+      insert_process(name, pid, cmdline, &processes);
+      free(name);
+      free(cmdline);
+    }
+    fclose(file);
+    continue;
+
     closedir(proc);
   }
 
@@ -220,7 +246,7 @@ int main(int argc, char *argv[]) {
     char *name = processes.processes[i].name;
     char *cmdline = processes.processes[i].cmdline;
     // printf("----\n");
-    printf("%s -> %s", pid, name);
+    printf("%s -> %s : %s", pid, name, cmdline);
     // printf("%s\n", cmdline);
     // printf("----\n");
     putchar('\0');
